@@ -1,0 +1,185 @@
+﻿Lexing in T-Lex is done by tagging. Rules can apply tags to tokens or consolidate them into a larger token.
+
+Rules work given a set of characters. This initial string is separated into tokens, one for each character.
+Each character is then given a tag with its text. For example, the initial tagging of "3.14" would end up as:
+
+'3' => "3"
+'.' => "."
+'1' => "1"
+'4' => "4"
+
+This is done automatically, and it is the only time the text of a character is used explicitly.
+It should be noted that the text of a token cannot be accessed when making rules, but these tags can.
+Custom rules are created with a set of opcodes. Rules begin executing on every single character, 
+but they can be cancelled very quickly, reducing performance overhead. The most basic opcode is
+
+NEXT: moves to the next rule and the next token
+
+This opcode is what allows for rules to be complex, but our system is not yet Turing-complete. We still need
+
+IF [Tag] { ... }: executes the code inside the curly braces if the tag is found
+IF [Tag] { ... } ELSE { ... }: executes the code inside the first set of curly braces if the tag is found, 
+and the code inside the second set otherwise
+
+Note that this opcode only allows for one tag. Repeated use of this rule (to apply one tag to several cases)
+is useful for complex operations.
+
+CANCEL: ends execution of this rule and moves to the next token
+SKIP: skips this rule and tries the next rule on the same token
+REPEAT: when used inside an IF/ELSE statement, repeats the statement on the next token
+BACK: returns to the previous token
+
+These four opcodes allow for control flow, but we cannot yet do meaningful work with our rules. 
+These final three opcodes change this:
+
+WRAP: combines all the previous tokens into one
+ADD [Tag]: adds the tag to the current token
+DELETE: deletes the current token, selecting the next one
+
+Let's see how these opcodes might play out in a typical rule. We can do this with an example project:
+creating a lexer to process sets of integer and decimal numbers.
+Our goal will be for all proper integer and decimal numbers to be recognized as individual tokens,
+and for all other characters to remain separate. First, let's figure out what makes an integer:
+
+Integers cannot begin with 0, but they may have infixed zeroes. Let's assume we have applied two tags: 
+one for 0-9 digits and one for 1-9 digits. Our integer rule will be as follows:
+
+IF [1-9]
+{
+	NEXT
+}
+ELSE
+{
+	CANCEL
+}
+
+IF [0-9]
+{
+	REPEAT
+}
+ELSE
+{
+	SKIP
+}
+
+WRAP
+BACK
+ADD [Integer]
+
+Let's analyze this, step by step:
+
+IF [1-9]
+{
+	NEXT
+}
+ELSE
+{
+	CANCEL
+}
+
+This step branches into two parts depending on whether or not the character is 1-9. 
+If the character is a number from 1 to 9, we move on to the next rule; otherwise, we cancel the rule entirely.
+
+IF [0-9]
+{
+	REPEAT
+}
+ELSE
+{
+	SKIP
+}
+
+This step is similar to the last one, but it includes a REPEAT and SKIP opcode instead of NEXT and CANCEL.
+In this case, our step repeats with the next token if a number from 0-9 is found, 
+and skips to the next step otherwise. This allows for arbitrarily long integers to be parsed. 
+But what is this next step?
+
+WRAP
+BACK
+ADD [Integer]
+
+There's a lot to process here. Keep in mind that we are here after a SKIP instruction: this is the first
+token that is NOT part of our integer. As such, we may now use WRAP to combine all previous tokens.
+After this, we want to add the Integer tag to our wrapped-up token. We first have to access it with BACK,
+but once we do this, we can simply add the Integer tag to the whole shebang. 
+Let's process a real-life string with this:
+
+35 + 078
+^
+
+This caret represents our scanner head, which we move with NEXT, REPEAT, and BACK instructions.
+It always starts on the first token we are scanning. Let's execute our first instruction.
+
+IF [1-9]
+{
+	NEXT
+}
+
+We don't even need to see the ELSE block. 3 is between 1 and 9, so we move to the next token and step.
+
+35 + 078
+ ^
+
+IF [0-9]
+{
+	REPEAT
+}
+
+Again, no need to see the ELSE block. We repeat this instruction on the next token:
+
+35 + 078
+  ^
+
+IF [0-9]
+{
+	REPEAT
+}
+ELSE
+{
+	SKIP
+}
+
+Looks like we need to use that SKIP now. Since the 0-9 tag is not present, we move to the next instruction:
+
+35 + 078
+  ^
+
+WRAP
+
+Let's take our previous tokens and surround them with parentheses to make clear they are wrapped.
+
+(35) + 078
+    ^
+
+BACK
+
+This moves our scanner head onto our freshly-wrapped token:
+
+(35) + 078
+^^^^
+
+ADD [Integer]
+
+This last line tags our new token with Integer, giving us a tagged token.
+We've also reached the end of our step, so we can move on to the next token.
+The whole process repeats simply as we've seen, and the end result is this:
+
+(35: Integer) + 0(78: Integer)
+
+Notice how our leading 0 was skipped: it triggered the CANCEL opcode in step 1.
+
+Optionally, we can add one more rule to our lexer:
+
+IF [Integer]
+{
+	CANCEL
+}
+ELSE
+{
+	DELETE
+	BACK
+	CANCEL
+}
+
+This simply checks if a token is an integer and deletes it otherwise, leaving only integers.
+This concludes the guide to lexing with T-Lex!
